@@ -3,7 +3,10 @@ from network_factory.network import network, network_arg_scope
 from tensorflow.python.framework import graph_util
 from collections import OrderedDict
 import tensorflow as tf
+from proto_py.network_pb2 import XZY_Network
+from node_function_map import CNodeFunctionMap
 import os
+import string
 slim = tf.contrib.slim
 
 
@@ -33,13 +36,12 @@ def get_exported_node_name_and_input_names(graph_def):
     """
     # Reshape is for flatten operation
     # BiasAdd is for convolution and fully connected
-    operation_names = ["Placeholder", "depthwise", "convolution", "BatchNorm",
+    operation_names = ["Placeholder", "depthwise", "convolution", "BatchNorm",  # "Reshape"
                        "Sigmoid", "Mul", "Relu", "MaxPool", "AvgPool2D"]
     tf_nodes = graph_def.node
     exported_node_name_and_input_names = OrderedDict()
     for i in range(len(tf_nodes)):
         if "Res_Add" in tf_nodes[i].name:
-            tf_nodes[i].name += "/Res_Add"
             exported_node_name_and_input_names[tf_nodes[i].name] = \
                 get_node_input(tf_nodes, tf_nodes[i], exported_node_name_and_input_names.keys())
         index = get_operation_name_index(operation_names, tf_nodes[i].name)
@@ -50,16 +52,30 @@ def get_exported_node_name_and_input_names(graph_def):
             continue
         exported_node_name_and_input_names[tf_nodes[i].name] = \
             get_node_input(tf_nodes, tf_nodes[i], exported_node_name_and_input_names.keys())
-        if "fully_connected" and "BatchNorm" in tf_nodes[i].name:
-            node_name = tf_nodes[i].name
-            input_node_names = exported_node_name_and_input_names[tf_nodes[i].name]
-            del exported_node_name_and_input_names[tf_nodes[i].name]
-            exported_node_name_and_input_names[node_name.split("/")[0] + "/Res_Add"] = input_node_names
-            exported_node_name_and_input_names[node_name] = [node_name.split("/")[0] + "/Res_Add"]
+        if "fully_connected" in tf_nodes[i].name:
+            if "BatchNorm" in tf_nodes[i].name:
+                node_name = tf_nodes[i].name
+                input_node_names = exported_node_name_and_input_names[tf_nodes[i].name]
+                del exported_node_name_and_input_names[tf_nodes[i].name]
+                exported_node_name_and_input_names["/".join(node_name.split("/")[0:3]) + "/Tensordot"] = input_node_names
+                exported_node_name_and_input_names[node_name] = ["/".join(node_name.split("/")[0:3]) + "/Tensordot"]
     return exported_node_name_and_input_names
 
 
-def freeze_graph(model_folder, output_graph):
+def get_exported_nodes(tf_nodes, exported_node_name_and_input_names):
+    node_function_map = CNodeFunctionMap()
+    exported_nodes = OrderedDict()
+    count = 0
+    for node_name in exported_node_name_and_input_names:
+        print("Node : {}  {}".format(count, node_name))
+        exported_nodes[node_name] = node_function_map[node_name](
+            tf_nodes, node_name, exported_node_name_and_input_names[node_name], exported_nodes)
+        count += 1
+
+    return exported_nodes
+
+
+def export_xzy_pb_file(model_folder, pb_file_path):
     # We retrieve our checkpoint fullpath
     checkpoint = tf.train.get_checkpoint_state(model_folder)
     input_checkpoint = checkpoint.model_checkpoint_path
@@ -90,21 +106,26 @@ def freeze_graph(model_folder, output_graph):
             output_graph_def = graph_util.convert_variables_to_constants(
                 sess,
                 input_graph_def,
-                [last_node_name],
-                # output_node_names.split(",")  # We split on comma for convenience
+                [last_node_name]
             )
             exported_node_name_and_input_names = get_exported_node_name_and_input_names(output_graph_def)
             for item in exported_node_name_and_input_names.items():
                 print(item)
+            exported_nodes = get_exported_nodes(output_graph_def.node, exported_node_name_and_input_names)
+            xzy_network = XZY_Network()
+            xzy_network.operation_nodes.extend(exported_nodes.values())
+            with open(pb_file_path, "wb") as network_file:
+                network_file.write(xzy_network.SerializeToString())
+            print("%d ops in the final graph." % len(exported_node_name_and_input_names))
             # Finally we serialize and dump the output graph to the filesystem
-            with tf.gfile.GFile(output_graph, "wb") as f:
-                f.write(output_graph_def.SerializeToString())
-            print("%d ops in the final graph." % len(output_graph_def.node))
+            # with tf.gfile.GFile(pb_file_path, "wb") as f:
+            #     f.write(output_graph_def.SerializeToString())
+            # print("%d ops in the final graph." % len(output_graph_def.node))
 
 
-def load_graph(frozen_graph_filename):
+def load_graph(pb_file_path):
     # We parse the graph_def file
-    with tf.gfile.GFile(frozen_graph_filename, "rb") as f:
+    with tf.gfile.GFile(pb_file_path, "rb") as f:
         graph_def = tf.GraphDef()
         graph_def.ParseFromString(f.read())
 
@@ -121,8 +142,11 @@ def load_graph(frozen_graph_filename):
     return graph
 
 
-def print_graph(frozen_model_filename, save_to_txt=False):
-    graph = load_graph(frozen_model_filename)
+def print_graph(pb_file_path, save_to_txt=False):
+    if os.path.isfile(pb_file_path) is False:
+        print("pb_file_path is not a file!")
+        exit()
+    graph = load_graph(pb_file_path)
     # 输入,输出结点也是operation,所以,我们可以得到operation的名字
     # for op in graph.get_operations():
     #     print(op.name, op.values())
@@ -133,29 +157,21 @@ def print_graph(frozen_model_filename, save_to_txt=False):
     # print("input_tensor", x)
     # y = graph.get_tensor_by_name('prefix/fully_connected_2/BiasAdd:0')
     if save_to_txt:
-        pb2txt(frozen_model_filename)
-
-
-def pb2txt(pb_file_path):
-    if os.path.isfile(pb_file_path) is False:
-        print("pb_file_path is not a file!")
-        exit()
-    pb_base_name = os.path.basename(pb_file_path)
-    suffix = ".txt"
-    log_file = open(pb_base_name + suffix, "w")
-    graph = load_graph(pb_file_path)
-    # for op in graph.get_operations():
-    #     log_file.write("{}\n".format(op.name))
-    for node in graph.as_graph_def().node:
-        log_file.write("{} {}\n".format(node.name, node.input))
+        pb_file_name = pb_file_path.replace(".pb", ".txt")
+        log_file = open(pb_file_name, "w")
+        graph = load_graph(pb_file_path)
+        # for op in graph.get_operations():
+        #     log_file.write("{} {}\n".format(op.name, op.values()))
+        for node in graph.as_graph_def().node:
+            log_file.write("{} {}\n".format(node.name, node.input))
 
 
 def main():
     model_folder_path = r"./models"
-    output_graph = "./pb_folders/frozen_model.pb"
-    freeze_graph(model_folder_path, output_graph)
+    pb_file_path = "./pb_folders/frozen_model.pb"
+    export_xzy_pb_file(model_folder_path, pb_file_path)
     # convert_trained_model_to_pb(model_folder_path)
-    # print_graph(output_graph, save_to_txt=True)
+    # print_graph(pb_file_path, save_to_txt=True)
     pass
 
 

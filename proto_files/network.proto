@@ -1,0 +1,7 @@
+syntax = "proto3";
+
+import "node.proto";
+
+message XZY_Network {
+    repeated XZY_Node operation_nodes = 2;
+}

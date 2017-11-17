@@ -1,0 +1,7 @@
+syntax = "proto3";
+
+message XZY_Shape {
+    uint32 channel = 1;
+    uint32 height = 2;
+    uint32 width = 3;
+}

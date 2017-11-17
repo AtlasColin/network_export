@@ -1,0 +1,6 @@
+syntax = "proto3";
+
+message XZY_FullyConnectedParam {
+    repeated float weight = 3;
+    repeated float biases = 4;
+}

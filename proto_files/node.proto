@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+import "shape.proto";
+import "batch_norm_param.proto";
+import "conv_param.proto";
+import "fully_connected_param.proto";
+import "max_pooling_param.proto";
+import "separable_convolution_param.proto";
+
+message XZY_Node {
+    string name = 1;
+    repeated string input_names = 2;
+    repeated XZY_Shape input_shapes = 3;
+    XZY_Shape output_shape = 4;
+    oneof param {
+        XZY_BatchNormalizationParam batch_normalization_param = 5;
+        XZY_ConvolutionParam convolution_param = 6;
+        XZY_FullyConnectedParam fully_connected_param = 7;
+        XZY_MaxPoolingParam max_pooling_param = 8;
+        XZY_SeparableConvolutionParams separable_convolution_param = 9;
+    }
+}

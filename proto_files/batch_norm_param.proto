@@ -1,0 +1,8 @@
+syntax = "proto3";
+
+message XZY_BatchNormalizationParam {
+    repeated float mean = 2;
+    repeated float variance = 3;
+    repeated float scale = 4;
+    repeated float offset = 5;
+}
