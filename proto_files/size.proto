@@ -1,6 +1,0 @@
-syntax = "proto3";
-
-message XZY_Size {
-    uint32 height = 1;
-    uint32 width = 2;
-}
